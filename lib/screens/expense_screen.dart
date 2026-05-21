@@ -29,11 +29,13 @@ class NumericTextFormatter extends TextInputFormatter {
 class RawMaterialItem {
   final TextEditingController nameCtrl = TextEditingController();
   final TextEditingController qtyCtrl = TextEditingController();
+  final TextEditingController priceCtrl = TextEditingController(); 
   String unit = 'kg';
 
   void dispose() {
     nameCtrl.dispose();
     qtyCtrl.dispose();
+    priceCtrl.dispose(); 
   }
 }
 // ──────────────────────────────────────────────────────────────────────
@@ -48,7 +50,7 @@ class ExpenseScreen extends StatefulWidget {
 class _ExpenseScreenState extends State<ExpenseScreen> {
   bool _isLoading = true;
   List<ExpenseModel> _expenses = [];
-  List<ProductModel> _products = []; // DIKEMBALIKAN: Untuk list dropdown menu
+  List<ProductModel> _products = [];
 
   @override
   void initState() {
@@ -56,17 +58,12 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
     _loadData();
   }
 
- Future<void> _loadData() async {
+  Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
-      // Tarik data dari Database
       final expensesData = await SupabaseService.getExpenses();
       final productsData = await SupabaseService.getProducts();
-      
       setState(() {
-        // [PERBAIKAN KRUSIAL] 
-        // Tambahkan "?? []" (Null-Coalescing). 
-        // Artinya: Jika data dari Supabase ternyata null, jadikan List kosong [].
         _expenses = expensesData ?? [];
         _products = productsData ?? [];
         _isLoading = false;
@@ -74,7 +71,6 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
-        // Error tidak akan membuat layar merah, melainkan hanya muncul di notifikasi bawah
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Info Sistem: $e'), backgroundColor: Colors.orange),
         );
@@ -86,7 +82,6 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
     return NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0).format(amount);
   }
 
-  // Memanggil Modal dengan mengirimkan data produk (menu)
   void _showAddExpenseDialog() {
     showDialog(
       context: context,
@@ -94,7 +89,7 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
       builder: (context) => ExpenseModalDialog(products: _products),
     ).then((isSaved) {
       if (isSaved == true) {
-        _loadData(); // Segarkan tabel jika modal sukses menyimpan
+        _loadData();
       }
     });
   }
@@ -111,7 +106,6 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
           Expanded(
             child: Column(
               children: [
-                // Header
                 Container(
                   height: 80, padding: const EdgeInsets.symmetric(horizontal: 32),
                   decoration: const BoxDecoration(color: Colors.white, border: Border(bottom: BorderSide(color: Color(0xFFF1F5F9)))),
@@ -133,7 +127,6 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
                   ),
                 ),
 
-                // Konten Tabel
                 Expanded(
                   child: _isLoading 
                     ? const Center(child: CircularProgressIndicator())
@@ -208,7 +201,7 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
 
 // ── KELAS MODAL TERSENDIRI (STATEFUL) UNTUK LOGIKA DYNAMIC FORM ────────
 class ExpenseModalDialog extends StatefulWidget {
-  final List<ProductModel> products; // Menerima data produk dari layar utama
+  final List<ProductModel> products;
   
   const ExpenseModalDialog({super.key, required this.products});
 
@@ -221,14 +214,13 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
   final List<String> _categories = ['Operasional', 'Bahan Baku', 'Gaji Pegawai', 'Lain-lain'];
   final List<String> _unitOptions = ['kg', 'gram', 'liter', 'ml', 'pcs', 'ikat', 'pack'];
   
-  ProductModel? _selectedProduct; // Variabel untuk menyimpan menu yang dipilih
+  ProductModel? _selectedProduct;
   
   final TextEditingController _descController = TextEditingController();
   final TextEditingController _amountController = TextEditingController();
   
   bool _isSubmitting = false;
 
-  // List untuk menyimpan deretan form bahan baku dinamis
   final List<RawMaterialItem> _rawMaterials = [];
 
   @override
@@ -241,6 +233,32 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
     super.dispose();
   }
 
+  // ── [FUNGSI BARU] KALKULATOR TOTAL OTOMATIS ─────────────────
+  void _calculateTotal() {
+    if (_selectedCategory != 'Bahan Baku') return; // Hanya hitung jika kategori Bahan Baku
+
+    double totalSum = 0;
+    for (var item in _rawMaterials) {
+      // Hapus titik ribuan untuk diubah ke angka (double)
+      String cleanPrice = item.priceCtrl.text.replaceAll(RegExp(r'[^\d]'), '');
+      if (cleanPrice.isNotEmpty) {
+        totalSum += double.parse(cleanPrice);
+      }
+    }
+
+    // Format kembali ke string dengan format ribuan dan suntikkan ke _amountController
+    if (totalSum > 0) {
+      final formatted = NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(totalSum).trim();
+      _amountController.value = TextEditingValue(
+        text: formatted,
+        selection: TextSelection.collapsed(offset: formatted.length),
+      );
+    } else {
+      _amountController.text = ''; // Kosongkan jika hasilnya 0
+    }
+  }
+  // ─────────────────────────────────────────────────────────────
+
   void _addRawMaterialRow() {
     setState(() {
       _rawMaterials.add(RawMaterialItem());
@@ -252,12 +270,13 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
       _rawMaterials[index].dispose();
       _rawMaterials.removeAt(index);
     });
+    // Jika baris dihapus, hitung ulang totalnya!
+    _calculateTotal(); 
   }
 
   Future<void> _saveExpense() async {
     if (_amountController.text.isEmpty) return;
     
-    // Validasi khusus Bahan Baku (Harus pilih menu)
     if (_selectedCategory == 'Bahan Baku' && _selectedProduct == null) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pilih Menu tujuan untuk bahan baku ini!'), backgroundColor: Colors.orange));
       return;
@@ -268,7 +287,6 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
     try {
       double totalAmount = double.parse(_amountController.text.replaceAll(RegExp(r'[^\d]'), ''));
       
-      // Menggabungkan nama menu & rincian bahan baku ke dalam deskripsi
       String finalDescription = _descController.text;
       if (_selectedCategory == 'Bahan Baku') {
         String menuName = _selectedProduct?.name ?? 'Umum';
@@ -277,14 +295,16 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
         if (_rawMaterials.isNotEmpty) {
           List<String> details = _rawMaterials
               .where((item) => item.nameCtrl.text.isNotEmpty && item.qtyCtrl.text.isNotEmpty)
-              .map((item) => "${item.nameCtrl.text} (${item.qtyCtrl.text} ${item.unit})")
+              .map((item) {
+                String priceTxt = item.priceCtrl.text.isNotEmpty ? " - Rp ${item.priceCtrl.text}" : "";
+                return "${item.nameCtrl.text} (${item.qtyCtrl.text} ${item.unit}$priceTxt)";
+              })
               .toList();
           if (details.isNotEmpty) {
             rincianStr = "\n[Rincian: ${details.join(', ')}]";
           }
         }
         
-        // Format estetik di tabel riwayat: "Bahan Baku: Nasi Goreng \n Deskripsi..."
         String rawDesc = _descController.text.isNotEmpty ? "\nCatatan: ${_descController.text}" : "";
         finalDescription = "[Menu: $menuName]$rawDesc$rincianStr";
       }
@@ -295,14 +315,14 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
         amount: totalAmount,
         date: DateTime.now(),
         category: _selectedCategory,
-        linkedProductId: _selectedProduct?.id, // Menautkan ID Menu ke database Expense
+        linkedProductId: _selectedProduct?.id, 
       );
 
       await SupabaseService.addExpense(expense);
       
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('✅ Pengeluaran dicatat!'), backgroundColor: Colors.green));
-        Navigator.pop(context, true); // Tutup dan kembalikan nilai 'true'
+        Navigator.pop(context, true);
       }
     } catch (e) {
       setState(() => _isSubmitting = false);
@@ -312,9 +332,8 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
 
   @override
   Widget build(BuildContext context) {
-    // Responsivitas Lebar Modal
     final screenWidth = MediaQuery.of(context).size.width;
-    final dialogWidth = screenWidth > 800 ? 650.0 : screenWidth * 0.9;
+    final dialogWidth = screenWidth > 800 ? 750.0 : screenWidth * 0.95;
 
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
@@ -325,7 +344,6 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Header Modal
             Row(
               children: [
                 Container(
@@ -339,13 +357,11 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
             ),
             const SizedBox(height: 24),
             
-            // Area Scroll (Jika form bertambah banyak tidak tertutup layar)
             Flexible(
               child: SingleChildScrollView(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // 1. Dropdown Kategori
                     const Text('Kategori', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textGrey)),
                     const SizedBox(height: 8),
                     DropdownButtonFormField<String>(
@@ -362,17 +378,18 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                           if (_selectedCategory != 'Bahan Baku') {
                             _selectedProduct = null;
                             _rawMaterials.clear();
+                            _amountController.clear(); // Bersihkan total saat ganti kategori
                           } else if (_rawMaterials.isEmpty) {
-                            _addRawMaterialRow(); // Langsung tambah 1 baris kosong
+                            _amountController.clear(); // Bersihkan juga
+                            _addRawMaterialRow();
                           }
                         });
                       },
                     ),
                     const SizedBox(height: 24),
 
-                    // 2. ── DYNAMIC FORM BAHAN BAKU & PILIHAN MENU ─────────────────────────────
+                    // ── DYNAMIC FORM BAHAN BAKU ─────────────────────────────
                     if (_selectedCategory == 'Bahan Baku') ...[
-                      // Dropdown Pilih Menu
                       const Text('Untuk Menu / Produk', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textGrey)),
                       const SizedBox(height: 8),
                       DropdownButtonFormField<ProductModel>(
@@ -392,7 +409,7 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                       Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
-                          color: AppTheme.backgroundGrey.withOpacity(0.6), // Soft grey background
+                          color: AppTheme.backgroundGrey.withOpacity(0.6),
                           borderRadius: BorderRadius.circular(16),
                           border: Border.all(color: Colors.grey.shade300),
                         ),
@@ -426,14 +443,12 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                                   return Row(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      // Nama Bahan Baku (Kiri, Lebih Lebar / flex 5)
                                       Expanded(
-                                        flex: 5,
+                                        flex: 4,
                                         child: TextField(
                                           controller: item.nameCtrl,
                                           decoration: InputDecoration(
-                                            labelText: 'Nama Bahan Baku',
-                                            hintText: 'Misal: Bawang Putih',
+                                            labelText: 'Nama Bahan',
                                             isDense: true,
                                             filled: true, fillColor: Colors.white,
                                             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
@@ -442,15 +457,13 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                                       ),
                                       const SizedBox(width: 8),
                                       
-                                      // Jumlah / Takaran (Tengah / flex 3)
                                       Expanded(
-                                        flex: 3,
+                                        flex: 2,
                                         child: TextField(
                                           controller: item.qtyCtrl,
                                           keyboardType: TextInputType.number,
                                           decoration: InputDecoration(
                                             labelText: 'Jumlah',
-                                            hintText: '10',
                                             isDense: true,
                                             filled: true, fillColor: Colors.white,
                                             border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
@@ -459,11 +472,10 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                                       ),
                                       const SizedBox(width: 8),
 
-                                      // Dropdown Satuan (Kanan / flex 3)
                                       Expanded(
-                                        flex: 3,
+                                        flex: 2,
                                         child: Container(
-                                          height: 48, // Menyamakan tinggi dengan TextField isDense
+                                          height: 48,
                                           decoration: BoxDecoration(
                                             color: Colors.white,
                                             border: Border.all(color: Colors.grey.shade400),
@@ -484,9 +496,25 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                                           ),
                                         ),
                                       ),
+                                      const SizedBox(width: 8),
+
+                                      Expanded(
+                                        flex: 3,
+                                        child: TextField(
+                                          controller: item.priceCtrl,
+                                          keyboardType: TextInputType.number,
+                                          inputFormatters: [NumericTextFormatter()], 
+                                          onChanged: (val) => _calculateTotal(), // [TRIGGER KALKULATOR]
+                                          decoration: InputDecoration(
+                                            labelText: 'Harga (Rp)',
+                                            isDense: true,
+                                            filled: true, fillColor: Colors.white,
+                                            border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+                                          ),
+                                        ),
+                                      ),
                                       const SizedBox(width: 4),
 
-                                      // Tombol Hapus (Ujung Kanan)
                                       IconButton(
                                         onPressed: () => _removeRawMaterialRow(index),
                                         icon: const Icon(Icons.delete_outline, color: Colors.red),
@@ -498,7 +526,6 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                               ),
 
                             const SizedBox(height: 16),
-                            // Tombol Tambah Bahan Baku (Full Width)
                             SizedBox(
                               width: double.infinity,
                               height: 45,
@@ -521,7 +548,6 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                     ],
                     // ────────────────────────────────────────────────────────────
 
-                    // 3. Deskripsi Umum
                     const Text('Deskripsi / Catatan Tambahan', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppTheme.textGrey)),
                     const SizedBox(height: 8),
                     TextField(
@@ -535,20 +561,26 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                     ),
                     const SizedBox(height: 16),
 
-                    // 4. Total Biaya (Rp)
-                    const Text('Total Biaya (Rp)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppTheme.textGrey)),
+                    // [REVISI] Kolom Total Biaya sekarang terhubung dengan kalkulator
+                    const Text('Total Keseluruhan Biaya (Rp)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppTheme.textGrey)),
                     const SizedBox(height: 8),
                     TextField(
                       controller: _amountController,
                       keyboardType: TextInputType.number,
-                      inputFormatters: [NumericTextFormatter()], // Menggunakan formatter otomatis
+                      readOnly: _selectedCategory == 'Bahan Baku', // Kunci kolom jika kategori Bahan Baku
+                      inputFormatters: [NumericTextFormatter()],
                       style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.red),
                       decoration: InputDecoration(
                         prefixText: 'Rp ',
                         prefixStyle: const TextStyle(color: Colors.black54, fontSize: 18, fontWeight: FontWeight.bold),
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                        filled: true, fillColor: AppTheme.backgroundGrey,
-                        focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: const BorderSide(color: Colors.red, width: 2)),
+                        // Warna abu-abu redup jika Auto-Calculate untuk penanda visual
+                        filled: true, 
+                        fillColor: _selectedCategory == 'Bahan Baku' ? Colors.grey.shade200 : AppTheme.backgroundGrey,
+                        focusedBorder: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(10), 
+                          borderSide: BorderSide(color: _selectedCategory == 'Bahan Baku' ? Colors.transparent : Colors.red, width: 2)
+                        ),
                       ),
                     ),
                   ],
@@ -558,7 +590,6 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
             
             const SizedBox(height: 32),
             
-            // Tombol Aksi (Batal & Simpan)
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
