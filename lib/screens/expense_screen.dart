@@ -5,6 +5,7 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/theme.dart';
 import '../../models/expense_model.dart';
+import '../../models/product_model.dart';
 import '../../services/supabase_service.dart';
 import '../../widgets/admin/admin_sidebar.dart';
 
@@ -26,10 +27,8 @@ class NumericTextFormatter extends TextInputFormatter {
 
 // ── KELAS PEMBANTU UNTUK DYNAMIC FORM BAHAN BAKU ──────────────────────
 class RawMaterialItem {
-  // [PERBAIKAN 1]: Mengembalikan dua baris Controller yang sempat terhapus
   final TextEditingController nameCtrl = TextEditingController();
   final TextEditingController qtyCtrl = TextEditingController();
-  
   String unit = 'kg';
 
   void dispose() {
@@ -49,8 +48,7 @@ class ExpenseScreen extends StatefulWidget {
 class _ExpenseScreenState extends State<ExpenseScreen> {
   bool _isLoading = true;
   List<ExpenseModel> _expenses = [];
-  
-  // [PERBAIKAN 2]: List<ProductModel> _products; DIHAPUS karena sudah tidak dipakai
+  List<ProductModel> _products = []; // DIKEMBALIKAN: Untuk list dropdown menu
 
   @override
   void initState() {
@@ -58,20 +56,27 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
     _loadData();
   }
 
-  Future<void> _loadData() async {
+ Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
-      final expenses = await SupabaseService.getExpenses();
-      // [PERBAIKAN 3]: Pemanggilan SupabaseService.getProducts(); DIHAPUS agar performa lebih ringan
+      // Tarik data dari Database
+      final expensesData = await SupabaseService.getExpenses();
+      final productsData = await SupabaseService.getProducts();
+      
       setState(() {
-        _expenses = expenses;
+        // [PERBAIKAN KRUSIAL] 
+        // Tambahkan "?? []" (Null-Coalescing). 
+        // Artinya: Jika data dari Supabase ternyata null, jadikan List kosong [].
+        _expenses = expensesData ?? [];
+        _products = productsData ?? [];
         _isLoading = false;
       });
     } catch (e) {
       setState(() => _isLoading = false);
       if (mounted) {
+        // Error tidak akan membuat layar merah, melainkan hanya muncul di notifikasi bawah
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+          SnackBar(content: Text('Info Sistem: $e'), backgroundColor: Colors.orange),
         );
       }
     }
@@ -81,12 +86,12 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
     return NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0).format(amount);
   }
 
-  // Memanggil Modal yang sudah dipisah menjadi StatefulWidget
+  // Memanggil Modal dengan mengirimkan data produk (menu)
   void _showAddExpenseDialog() {
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => const ExpenseModalDialog(),
+      builder: (context) => ExpenseModalDialog(products: _products),
     ).then((isSaved) {
       if (isSaved == true) {
         _loadData(); // Segarkan tabel jika modal sukses menyimpan
@@ -203,7 +208,9 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
 
 // ── KELAS MODAL TERSENDIRI (STATEFUL) UNTUK LOGIKA DYNAMIC FORM ────────
 class ExpenseModalDialog extends StatefulWidget {
-  const ExpenseModalDialog({super.key});
+  final List<ProductModel> products; // Menerima data produk dari layar utama
+  
+  const ExpenseModalDialog({super.key, required this.products});
 
   @override
   State<ExpenseModalDialog> createState() => _ExpenseModalDialogState();
@@ -213,6 +220,8 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
   String _selectedCategory = 'Operasional';
   final List<String> _categories = ['Operasional', 'Bahan Baku', 'Gaji Pegawai', 'Lain-lain'];
   final List<String> _unitOptions = ['kg', 'gram', 'liter', 'ml', 'pcs', 'ikat', 'pack'];
+  
+  ProductModel? _selectedProduct; // Variabel untuk menyimpan menu yang dipilih
   
   final TextEditingController _descController = TextEditingController();
   final TextEditingController _amountController = TextEditingController();
@@ -248,22 +257,36 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
   Future<void> _saveExpense() async {
     if (_amountController.text.isEmpty) return;
     
+    // Validasi khusus Bahan Baku (Harus pilih menu)
+    if (_selectedCategory == 'Bahan Baku' && _selectedProduct == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Pilih Menu tujuan untuk bahan baku ini!'), backgroundColor: Colors.orange));
+      return;
+    }
+    
     setState(() => _isSubmitting = true);
 
     try {
       double totalAmount = double.parse(_amountController.text.replaceAll(RegExp(r'[^\d]'), ''));
       
-      // Menggabungkan deskripsi utama dengan rincian bahan baku (jika ada)
+      // Menggabungkan nama menu & rincian bahan baku ke dalam deskripsi
       String finalDescription = _descController.text;
-      if (_selectedCategory == 'Bahan Baku' && _rawMaterials.isNotEmpty) {
-        List<String> details = _rawMaterials
-            .where((item) => item.nameCtrl.text.isNotEmpty && item.qtyCtrl.text.isNotEmpty)
-            .map((item) => "${item.nameCtrl.text} (${item.qtyCtrl.text} ${item.unit})")
-            .toList();
-            
-        if (details.isNotEmpty) {
-          finalDescription += "\n[Rincian: ${details.join(', ')}]";
+      if (_selectedCategory == 'Bahan Baku') {
+        String menuName = _selectedProduct?.name ?? 'Umum';
+        
+        String rincianStr = "";
+        if (_rawMaterials.isNotEmpty) {
+          List<String> details = _rawMaterials
+              .where((item) => item.nameCtrl.text.isNotEmpty && item.qtyCtrl.text.isNotEmpty)
+              .map((item) => "${item.nameCtrl.text} (${item.qtyCtrl.text} ${item.unit})")
+              .toList();
+          if (details.isNotEmpty) {
+            rincianStr = "\n[Rincian: ${details.join(', ')}]";
+          }
         }
+        
+        // Format estetik di tabel riwayat: "Bahan Baku: Nasi Goreng \n Deskripsi..."
+        String rawDesc = _descController.text.isNotEmpty ? "\nCatatan: ${_descController.text}" : "";
+        finalDescription = "[Menu: $menuName]$rawDesc$rincianStr";
       }
 
       final expense = ExpenseModel(
@@ -272,6 +295,7 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
         amount: totalAmount,
         date: DateTime.now(),
         category: _selectedCategory,
+        linkedProductId: _selectedProduct?.id, // Menautkan ID Menu ke database Expense
       );
 
       await SupabaseService.addExpense(expense);
@@ -336,6 +360,7 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                         setState(() {
                           _selectedCategory = val!;
                           if (_selectedCategory != 'Bahan Baku') {
+                            _selectedProduct = null;
                             _rawMaterials.clear();
                           } else if (_rawMaterials.isEmpty) {
                             _addRawMaterialRow(); // Langsung tambah 1 baris kosong
@@ -345,8 +370,25 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                     ),
                     const SizedBox(height: 24),
 
-                    // 2. ── DYNAMIC FORM BAHAN BAKU ─────────────────────────────
+                    // 2. ── DYNAMIC FORM BAHAN BAKU & PILIHAN MENU ─────────────────────────────
                     if (_selectedCategory == 'Bahan Baku') ...[
+                      // Dropdown Pilih Menu
+                      const Text('Untuk Menu / Produk', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: AppTheme.textGrey)),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<ProductModel>(
+                        value: _selectedProduct,
+                        hint: const Text('Pilih Menu...'),
+                        isExpanded: true,
+                        decoration: InputDecoration(
+                          border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                          filled: true, fillColor: AppTheme.backgroundGrey,
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+                        ),
+                        items: widget.products.map((p) => DropdownMenuItem(value: p, child: Text(p.name))).toList(),
+                        onChanged: (val) => setState(() => _selectedProduct = val),
+                      ),
+                      const SizedBox(height: 16),
+
                       Container(
                         padding: const EdgeInsets.all(20),
                         decoration: BoxDecoration(
@@ -480,13 +522,13 @@ class _ExpenseModalDialogState extends State<ExpenseModalDialog> {
                     // ────────────────────────────────────────────────────────────
 
                     // 3. Deskripsi Umum
-                    const Text('Deskripsi Pengeluaran', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppTheme.textGrey)),
+                    const Text('Deskripsi / Catatan Tambahan', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: AppTheme.textGrey)),
                     const SizedBox(height: 8),
                     TextField(
                       controller: _descController,
                       maxLines: 2,
                       decoration: InputDecoration(
-                        hintText: _selectedCategory == 'Bahan Baku' ? 'Misal: Belanja sayur di pasar pagi...' : 'Misal: Bayar Listrik Bulan Ini',
+                        hintText: _selectedCategory == 'Bahan Baku' ? 'Misal: Belanja dari supplier Pak Budi...' : 'Misal: Bayar Listrik Bulan Ini',
                         border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
                         filled: true, fillColor: AppTheme.backgroundGrey,
                       ),
