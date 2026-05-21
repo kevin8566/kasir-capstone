@@ -14,7 +14,7 @@ class ExpenseScreen extends StatefulWidget {
   @override
   State<ExpenseScreen> createState() => _ExpenseScreenState();
 }
-//peli
+//pelimu
 class _ExpenseScreenState extends State<ExpenseScreen> {
   bool _isLoading = true;
   List<ExpenseModel> _expenses = [];
