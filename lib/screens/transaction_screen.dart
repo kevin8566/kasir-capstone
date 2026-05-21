@@ -20,10 +20,12 @@ class _TransactionScreenState extends State<TransactionScreen> {
   List<ProductModel> _products = [];
   List<TransactionModel> _recentTransactions = [];
   final List<CartItem> _cart = [];
+  
   String _searchQuery = '';
   String _selectedCategory = 'Semua';
   bool _isLoading = true;
   double _discount = 0;
+  bool _showPaymentSelection = false;
 
   @override
   void initState() {
@@ -31,13 +33,17 @@ class _TransactionScreenState extends State<TransactionScreen> {
     _loadData();
   }
 
+  // ── [FUNGSI SINKRONISASI REAL-TIME] ──────────────────────────────
+  // Fungsi ini dipanggil saat pertama buka & setiap kali transaksi selesai.
   Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
       final products = await SupabaseService.getProducts();
       final transactions = await SupabaseService.getTransactions();
+      
       setState(() {
         _products = products;
+        // Ambil 5 transaksi terakhir untuk riwayat di sebelah kanan
         _recentTransactions = transactions.take(5).toList();
         _isLoading = false;
       });
@@ -45,6 +51,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
       setState(() => _isLoading = false);
     }
   }
+  // ─────────────────────────────────────────────────────────────────
 
   List<String> get _categories {
     final cats = _products.map((p) => p.category).toSet().toList();
@@ -60,24 +67,22 @@ class _TransactionScreenState extends State<TransactionScreen> {
     }).toList();
   }
 
-  bool _showPaymentSelection = false;
-
-  // ── LOGIKA VALIDASI KERANJANG (DIUBAH) ──────────────────────────
+  // ── LOGIKA VALIDASI KERANJANG & STOK ──────────────────────────────
   void _addToCart(ProductModel product) {
-    if (product.stock <= 0) return; // Validasi Lapis 1: Stok habis
+    if (product.stock <= 0) return; // Validasi Lapis 1: Stok habis diabaikan
 
     setState(() {
       _showPaymentSelection = false;
       final existing = _cart.indexWhere((c) => c.product.id == product.id);
       
-      // Validasi Lapis 2: Cegah penambahan jika melebihi stok
+      // Validasi Lapis 2: Cegah penambahan jika melebihi stok yang ada
       final currentQtyInCart = existing != -1 ? _cart[existing].quantity : 0;
       if (currentQtyInCart >= product.stock) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Stok ${product.name} tidak mencukupi! (Sisa: ${product.stock})'),
-            backgroundColor: Colors.orange,
-            duration: const Duration(seconds: 1),
+            backgroundColor: Colors.orange.shade800,
+            duration: const Duration(seconds: 2),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -110,9 +115,15 @@ class _TransactionScreenState extends State<TransactionScreen> {
     return 'Rp ${amount.toStringAsFixed(0).replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]}.')}';
   }
 
-  void _confirmPayment(String method) async {
+  // ── LOGIKA PEMBAYARAN & REFRESH DATA ──────────────────────────────
+  void _confirmPayment(String method, {bool isMobileSheet = false}) async {
     if (_cart.isEmpty) return;
     
+    // Tutup BottomSheet Mobile jika pembayaran dilakukan dari HP
+    if (isMobileSheet && Navigator.of(context).canPop()) {
+      Navigator.pop(context);
+    }
+
     final transaction = TransactionModel(
       id: 'TRX-${const Uuid().v4().substring(0, 8).toUpperCase()}',
       items: List.from(_cart),
@@ -122,6 +133,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
       status: 'Completed',
     );
 
+    // Tampilkan Loading
     showDialog(
       context: context,
       barrierDismissible: false,
@@ -129,16 +141,21 @@ class _TransactionScreenState extends State<TransactionScreen> {
     );
 
     try {
+      // 1. Simpan Transaksi (Otomatis potong stok di backend)
       await SupabaseService.addTransaction(transaction);
-      if (mounted) Navigator.pop(context); // Pop loading
       
+      // 2. Tutup Loading
+      if (mounted) Navigator.pop(context); 
+      
+      // 3. Bersihkan Keranjang
       setState(() {
         _cart.clear();
         _discount = 0;
         _showPaymentSelection = false;
       });
       
-      // Refresh data agar stok terbaru dan riwayat transaksi termuat
+      // 4. [KUNCI SINKRONISASI] Panggil ulang data dari database
+      // Ini akan memperbarui angka stok di layar Kasir seketika itu juga!
       await _loadData();
       
       if (mounted) {
@@ -151,7 +168,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
         );
       }
     } catch (e) {
-      if (mounted) Navigator.pop(context); // Pop loading
+      if (mounted) Navigator.pop(context); // Tutup Loading jika error
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Gagal: $e'), backgroundColor: Colors.red),
@@ -159,6 +176,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
       }
     }
   }
+  // ─────────────────────────────────────────────────────────────────
 
   @override
   Widget build(BuildContext context) {
@@ -177,13 +195,13 @@ class _TransactionScreenState extends State<TransactionScreen> {
         : Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Left Side: Product Selection
+              // Kiri: Pemilihan Produk
               Expanded(
                 flex: 3,
                 child: _buildProductSection(isMobile),
               ),
               
-              // Right Side: Cart & Payment
+              // Kanan: Keranjang & Pembayaran
               Container(
                 width: 400,
                 decoration: BoxDecoration(
@@ -247,7 +265,6 @@ class _TransactionScreenState extends State<TransactionScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        // Search & Category
         Padding(
           padding: EdgeInsets.all(isMobile ? 16 : 24),
           child: Column(
@@ -255,27 +272,19 @@ class _TransactionScreenState extends State<TransactionScreen> {
             children: [
               _buildSearchBar(),
               const SizedBox(height: 24),
-              const Text(
-                'Kategori Menu',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-              ),
+              const Text('Kategori Menu', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
               const SizedBox(height: 16),
               _buildCategoryGrid(isMobile),
             ],
           ),
         ),
         
-        // Product Grid Header
         Padding(
           padding: EdgeInsets.symmetric(horizontal: isMobile ? 16 : 24),
-          child: const Text(
-            'Item Menu',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-          ),
+          child: const Text('Item Menu', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
         ),
         const SizedBox(height: 16),
 
-        // Product Grid
         Expanded(
           child: _isLoading
               ? const Center(child: CircularProgressIndicator(color: AppTheme.primaryBlue))
@@ -290,13 +299,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.04),
-            blurRadius: 20,
-            offset: const Offset(0, 4),
-          )
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 20, offset: const Offset(0, 4))],
       ),
       child: TextField(
         onChanged: (v) => setState(() => _searchQuery = v),
@@ -304,12 +307,8 @@ class _TransactionScreenState extends State<TransactionScreen> {
           hintText: 'Cari menu favorit...',
           hintStyle: TextStyle(color: Colors.grey.shade400),
           prefixIcon: const Icon(Icons.search, color: AppTheme.primaryBlue),
-          border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(16),
-            borderSide: BorderSide.none,
-          ),
-          filled: true,
-          fillColor: Colors.white,
+          border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+          filled: true, fillColor: Colors.white,
         ),
       ),
     );
@@ -342,12 +341,8 @@ class _TransactionScreenState extends State<TransactionScreen> {
                 decoration: BoxDecoration(
                   color: isSelected ? AppTheme.primaryBlue : Colors.white,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: isSelected ? AppTheme.primaryBlue : Colors.grey.shade200,
-                  ),
-                  boxShadow: isSelected ? [
-                    BoxShadow(color: AppTheme.primaryBlue.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))
-                  ] : null,
+                  border: Border.all(color: isSelected ? AppTheme.primaryBlue : Colors.grey.shade200),
+                  boxShadow: isSelected ? [BoxShadow(color: AppTheme.primaryBlue.withOpacity(0.3), blurRadius: 10, offset: const Offset(0, 4))] : null,
                 ),
                 child: Column(
                   children: [
@@ -355,11 +350,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                     const SizedBox(height: 8),
                     Text(
                       cat,
-                      style: TextStyle(
-                        color: isSelected ? Colors.white : AppTheme.textDark,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
-                      ),
+                      style: TextStyle(color: isSelected ? Colors.white : AppTheme.textDark, fontWeight: FontWeight.bold, fontSize: 12),
                     ),
                   ],
                 ),
@@ -401,7 +392,6 @@ class _TransactionScreenState extends State<TransactionScreen> {
     );
   }
 
-  // ── DESAIN KARTU PRODUK DENGAN VISUAL BLOCKING (DIUBAH) ─────────
   Widget _buildProductCard(ProductModel product) {
     final isOutOfStock = product.stock <= 0;
 
@@ -412,13 +402,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(20),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.04),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            )
-          ],
+          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 4))],
         ),
         child: Stack(
           fit: StackFit.expand,
@@ -429,7 +413,6 @@ class _TransactionScreenState extends State<TransactionScreen> {
                 Expanded(
                   child: ClipRRect(
                     borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                    // Filter abu-abu jika stok habis
                     child: ColorFiltered(
                       colorFilter: ColorFilter.mode(
                         isOutOfStock ? Colors.grey : Colors.transparent,
@@ -462,13 +445,8 @@ class _TransactionScreenState extends State<TransactionScreen> {
                         children: [
                           Text(
                             _formatCurrency(product.price),
-                            style: const TextStyle(
-                              color: AppTheme.primaryBlue,
-                              fontWeight: FontWeight.bold,
-                              fontSize: 14,
-                            ),
+                            style: const TextStyle(color: AppTheme.primaryBlue, fontWeight: FontWeight.bold, fontSize: 14),
                           ),
-                          // Indikator Stok di layar
                           Text(
                             'Sisa: ${product.stock}',
                             style: TextStyle(
@@ -484,7 +462,6 @@ class _TransactionScreenState extends State<TransactionScreen> {
                 ),
               ],
             ),
-            // Overlay Teks "HABIS" jika stok 0
             if (isOutOfStock)
               Container(
                 decoration: BoxDecoration(
@@ -494,12 +471,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
                 child: const Center(
                   child: Text(
                     'HABIS',
-                    style: TextStyle(
-                      color: Colors.red,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 22,
-                      letterSpacing: 2,
-                    ),
+                    style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold, fontSize: 22, letterSpacing: 2),
                   ),
                 ),
               ),
@@ -556,10 +528,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              const Text(
-                'Riwayat Transaksi Terakhir',
-                style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-              ),
+              const Text('Riwayat Transaksi Terakhir', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
                 decoration: BoxDecoration(color: AppTheme.primaryBlue, borderRadius: BorderRadius.circular(4)),
@@ -629,14 +598,8 @@ class _TransactionScreenState extends State<TransactionScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  item.product.name,
-                  style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-                ),
-                Text(
-                  _formatCurrency(item.product.price),
-                  style: const TextStyle(color: AppTheme.textGrey, fontSize: 12),
-                ),
+                Text(item.product.name, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
+                Text(_formatCurrency(item.product.price), style: const TextStyle(color: AppTheme.textGrey, fontSize: 12)),
               ],
             ),
           ),
@@ -652,16 +615,12 @@ class _TransactionScreenState extends State<TransactionScreen> {
                   padding: const EdgeInsets.symmetric(horizontal: 12),
                   child: Text('${item.quantity}', style: const TextStyle(fontWeight: FontWeight.bold)),
                 ),
-                // Tombol Add ini akan otomatis tertolak oleh _addToCart jika stok tidak cukup
                 _buildQtyBtn(Icons.add, () => _addToCart(item.product)),
               ],
             ),
           ),
           const SizedBox(width: 12),
-          Text(
-            _formatCurrency(item.total),
-            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-          ),
+          Text(_formatCurrency(item.total), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
         ],
       ),
     );
@@ -682,17 +641,10 @@ class _TransactionScreenState extends State<TransactionScreen> {
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
         color: Colors.white,
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withOpacity(0.06),
-            blurRadius: 20,
-            offset: const Offset(0, -4),
-          )
-        ],
+        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 20, offset: const Offset(0, -4))],
       ),
       child: Column(
         children: [
-          // Diskon
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -719,7 +671,6 @@ class _TransactionScreenState extends State<TransactionScreen> {
             ],
           ),
           const SizedBox(height: 16),
-          // Total
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -734,7 +685,6 @@ class _TransactionScreenState extends State<TransactionScreen> {
             ],
           ),
           const SizedBox(height: 24),
-          // Pay Button
           SizedBox(
             width: double.infinity,
             height: 54,
@@ -750,14 +700,13 @@ class _TransactionScreenState extends State<TransactionScreen> {
           ),
           if (_showPaymentSelection) ...[
             const SizedBox(height: 20),
-            // Payment Methods
             Row(
               children: [
-                _buildPaymentBtn('Tunai', Icons.money),
+                _buildPaymentBtn('Tunai', Icons.money, isMobileSheet),
                 const SizedBox(width: 12),
-                _buildPaymentBtn('QRIS', Icons.qr_code),
+                _buildPaymentBtn('QRIS', Icons.qr_code, isMobileSheet),
                 const SizedBox(width: 12),
-                _buildPaymentBtn('Debit', Icons.credit_card),
+                _buildPaymentBtn('Debit', Icons.credit_card, isMobileSheet),
               ],
             ),
           ],
@@ -771,16 +720,10 @@ class _TransactionScreenState extends State<TransactionScreen> {
     );
   }
 
-  Widget _buildPaymentBtn(String label, IconData icon) {
+  Widget _buildPaymentBtn(String label, IconData icon, bool isMobileSheet) {
     return Expanded(
       child: InkWell(
-        onTap: _cart.isEmpty ? null : () {
-            _confirmPayment(label);
-            // Tutup bottom sheet di mobile jika transaksi sukses
-            if (Navigator.of(context).canPop()) {
-              Navigator.pop(context);
-            }
-        },
+        onTap: _cart.isEmpty ? null : () => _confirmPayment(label, isMobileSheet: isMobileSheet),
         child: Container(
           padding: const EdgeInsets.symmetric(vertical: 16),
           decoration: BoxDecoration(
@@ -794,11 +737,7 @@ class _TransactionScreenState extends State<TransactionScreen> {
               const SizedBox(height: 8),
               Text(
                 label,
-                style: const TextStyle(
-                  color: AppTheme.textDark,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 13,
-                ),
+                style: const TextStyle(color: AppTheme.textDark, fontWeight: FontWeight.bold, fontSize: 13),
               ),
             ],
           ),

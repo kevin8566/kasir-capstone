@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart'; // [BARU] Wajib ditambahkan untuk TextInputFormatter
+import 'package:flutter/services.dart'; 
 import 'package:intl/intl.dart';
 
 import '../../core/theme.dart';
@@ -7,7 +7,7 @@ import '../../models/product_model.dart';
 import '../../services/supabase_service.dart';
 import '../../widgets/admin/admin_sidebar.dart';
 
-// ── [BARU] FORMATTER OTOMATIS RIBUAN (TITIK) ──────────────────────
+// ── FORMATTER OTOMATIS RIBUAN (TITIK) ──────────────────────
 class NumericTextFormatter extends TextInputFormatter {
   @override
   TextEditingValue formatEditUpdate(TextEditingValue oldValue, TextEditingValue newValue) {
@@ -15,17 +15,14 @@ class NumericTextFormatter extends TextInputFormatter {
       return newValue.copyWith(text: '');
     }
 
-    // Hapus semua karakter selain angka (membuang titik yang sudah ada)
     String numericOnly = newValue.text.replaceAll(RegExp(r'[^\d]'), '');
     if (numericOnly.isEmpty) {
       return const TextEditingValue(text: '');
     }
 
-    // Format kembali angkanya dengan titik ribuan gaya Indonesia
     final number = int.parse(numericOnly);
     final newText = NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(number).trim();
 
-    // Pastikan posisi kursor selalu berada di ujung kanan agar ketikan nyaman
     return TextEditingValue(
       text: newText,
       selection: TextSelection.collapsed(offset: newText.length),
@@ -60,7 +57,6 @@ class ProductionItem {
   final TextEditingController finalPriceController = TextEditingController(); 
 
   List<Map<String, dynamic>>? baseRecipe;
-  bool isAutoRecipe = true; 
   int lastPortion = 0; 
 
   double calculatedHPP = 0;
@@ -121,10 +117,8 @@ class _HppCalculatorScreenState extends State<HppCalculatorScreen> {
             );
             
             newItem.portionController.text = cachedItem['portions']?.toString() ?? '';
-            // [PERBAIKAN] Hapus titik saat parse dari string ke angka
             newItem.lastPortion = int.tryParse(newItem.portionController.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 0; 
             newItem.marginController.text = cachedItem['margin']?.toString() ?? '';
-            newItem.isAutoRecipe = cachedItem['isAutoRecipe'] ?? false; 
             
             SupabaseService.getRecipeForProduct(newItem.selectedProduct!.id).then((recipe) {
               newItem.baseRecipe = recipe;
@@ -166,77 +160,53 @@ class _HppCalculatorScreenState extends State<HppCalculatorScreen> {
   }
 
   void _applyBaseRecipe(ProductionItem item) {
-    if (item.baseRecipe == null || !item.isAutoRecipe) return;
-
-    // [PERBAIKAN] Pastikan membersihkan titik jika ada
-    int portions = int.tryParse(item.portionController.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 1;
-    if (portions < 1) portions = 1;
+    if (item.baseRecipe == null) return;
 
     item.ingredients.clear();
 
+    // Memuat resep dasar as-is (apa adanya)
     for (var baseIng in item.baseRecipe!) {
       final ing = IngredientItem();
       ing.nameController.text = baseIng['name'];
       ing.unit = baseIng['unit'];
 
-      double scaledQty = (baseIng['baseQty'] * portions).toDouble();
-      // Tulis dengan titik otomatis
-      ing.qtyController.text = NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(scaledQty).trim();
+      double baseQty = (baseIng['baseQty']).toDouble();
+      ing.qtyController.text = NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(baseQty).trim();
 
-      double scaledCost = (baseIng['baseCost'] * portions).toDouble();
-      // Tulis dengan titik otomatis
-      ing.costController.text = NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(scaledCost).trim();
+      double baseCost = (baseIng['baseCost']).toDouble();
+      ing.costController.text = NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(baseCost).trim();
 
       item.ingredients.add(ing);
     }
+    
+    // Set default porsi ke 1 saat resep baru dimuat
+    item.portionController.text = '1';
+    item.lastPortion = 1;
   }
 
+  // ── [REVISI LOGIKA HPP] ───────────────────────────────────────────
   void _handlePortionChange(ProductionItem item, String value) {
-    // [PERBAIKAN] Bersihkan pemisah titik terlebih dahulu
     int newPortion = int.tryParse(value.replaceAll(RegExp(r'[^\d]'), '')) ?? 0;
+    
+    // Kita HANYA mencatat porsi baru tanpa mengubah/mengalikan harga bahan baku.
+    // Ini memastikan saat porsi bertambah banyak, HPP akan menjadi lebih murah.
+    item.lastPortion = newPortion; 
 
-    if (newPortion > 0) {
-      if (item.baseRecipe != null && item.isAutoRecipe) {
-        _applyBaseRecipe(item);
-      } else {
-        if (item.lastPortion > 0 && newPortion != item.lastPortion) {
-          double ratio = newPortion / item.lastPortion;
-          
-          for (var ing in item.ingredients) {
-            // [PERBAIKAN] Bersihkan titik pada string agar takaran bisa dihitung
-            double currentQty = double.tryParse(ing.qtyController.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 0;
-            double currentCost = double.tryParse(ing.costController.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 0;
-
-            if (currentQty > 0) {
-              double scaledQty = currentQty * ratio;
-              ing.qtyController.text = NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(scaledQty).trim();
-            }
-            if (currentCost > 0) {
-              double scaledCost = currentCost * ratio;
-              ing.costController.text = NumberFormat.currency(locale: 'id_ID', symbol: '', decimalDigits: 0).format(scaledCost).trim();
-            }
-          }
-        }
-      }
-      item.lastPortion = newPortion; 
-    } else {
-      item.lastPortion = 0; 
-    }
-
+    // Eksekusi ulang pembagian HPP (Real-Time State Rebuild)
     _calculateLive(item);
   }
+  // ─────────────────────────────────────────────────────────────────
 
   void _calculateLive(ProductionItem item) {
-    // [PERBAIKAN] Bersihkan titik pada Porsi
     final int portions = int.tryParse(item.portionController.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 0;
     
     double sumCost = 0;
     for (var ing in item.ingredients) {
-      // Harga Total sudah dibersihkan sebelumnya
       double ingCost = double.tryParse(ing.costController.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 0;
       sumCost += ingCost;
       
       if (portions > 0) {
+        // Logika HPP per Bahan: Harga Total Bahan / Porsi Jadi
         double costPerPortion = ingCost / portions;
         ing.costPerPortionController.text = _formatIDR(costPerPortion);
       } else {
@@ -247,6 +217,7 @@ class _HppCalculatorScreenState extends State<HppCalculatorScreen> {
     item.totalIngredientCost = sumCost;
     final double margin = double.tryParse(item.marginController.text) ?? 0;
 
+    // Trigger Rebuild UI Keseluruhan (Termasuk Panel Live Simulation)
     setState(() {
       if (portions > 0) {
         item.calculatedHPP = item.totalIngredientCost / portions;
@@ -324,7 +295,6 @@ class _HppCalculatorScreenState extends State<HppCalculatorScreen> {
             'productId': item.selectedProduct!.id,
             'portions': item.portionController.text,
             'margin': item.marginController.text,
-            'isAutoRecipe': item.isAutoRecipe,
             'ingredients': ingList,
           });
         }
@@ -332,12 +302,10 @@ class _HppCalculatorScreenState extends State<HppCalculatorScreen> {
       SupabaseService.updateProductionHistoryCache(currentCache);
 
       for (var item in validItems) {
-        // [PERBAIKAN] Buang titik
         final int portions = int.tryParse(item.portionController.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 1;
 
         List<Map<String, dynamic>> generatedMasterRecipe = [];
         for (var ing in item.ingredients) {
-           // [PERBAIKAN] Buang titik dari angka takaran dan biaya
            double currentQty = double.tryParse(ing.qtyController.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 0;
            double currentCost = double.tryParse(ing.costController.text.replaceAll(RegExp(r'[^\d]'), '')) ?? 0;
 
@@ -491,7 +459,6 @@ class _HppCalculatorScreenState extends State<HppCalculatorScreen> {
               final recipe = await SupabaseService.getRecipeForProduct(val.id);
               setState(() {
                 item.baseRecipe = recipe;
-                item.isAutoRecipe = true; 
                 if (recipe != null) _applyBaseRecipe(item);
               });
               
@@ -511,33 +478,11 @@ class _HppCalculatorScreenState extends State<HppCalculatorScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                const Row(
                   children: [
-                    const Row(
-                      children: [
-                        Icon(Icons.kitchen, size: 18, color: Colors.grey),
-                        SizedBox(width: 8),
-                        Text('Rincian Bahan Mentah (Resep)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
-                      ],
-                    ),
-                    if (item.baseRecipe != null)
-                      Row(
-                        children: [
-                          const Text('Auto-Skala Resep', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.primaryBlue)),
-                          Switch(
-                            value: item.isAutoRecipe,
-                            activeColor: AppTheme.primaryBlue,
-                            onChanged: (val) {
-                              setState(() { item.isAutoRecipe = val; });
-                              if (val) {
-                                _applyBaseRecipe(item);
-                                _calculateLive(item);
-                              }
-                            },
-                          ),
-                        ],
-                      )
+                    Icon(Icons.kitchen, size: 18, color: Colors.grey),
+                    SizedBox(width: 8),
+                    Text('Rincian Bahan Mentah (Batch)', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14)),
                   ],
                 ),
                 const SizedBox(height: 16),
@@ -569,7 +514,7 @@ class _HppCalculatorScreenState extends State<HppCalculatorScreen> {
                             controller: ing.qtyController,
                             onChanged: (_) => _calculateLive(item),
                             keyboardType: TextInputType.number,
-                            inputFormatters: [NumericTextFormatter()], // <== [BARU] Menerapkan Auto-Titik
+                            inputFormatters: [NumericTextFormatter()], 
                             decoration: InputDecoration(
                               labelText: 'Berat/Takaran',
                               hintText: '100',
@@ -602,7 +547,7 @@ class _HppCalculatorScreenState extends State<HppCalculatorScreen> {
                             controller: ing.costController,
                             onChanged: (_) => _calculateLive(item), 
                             keyboardType: TextInputType.number,
-                            inputFormatters: [NumericTextFormatter()], // <== [BARU] Menerapkan Auto-Titik
+                            inputFormatters: [NumericTextFormatter()], 
                             decoration: InputDecoration(
                               labelText: 'Harga Total',
                               prefixText: 'Rp ',
@@ -673,7 +618,7 @@ class _HppCalculatorScreenState extends State<HppCalculatorScreen> {
                     });
                   },
                   keyboardType: TextInputType.number,
-                  inputFormatters: [NumericTextFormatter()], // <== [BARU] Sekalian diterapkan di Porsi
+                  inputFormatters: [NumericTextFormatter()], 
                   decoration: InputDecoration(
                     labelText: 'Porsi Jadi',
                     hintText: 'Misal: 50',
