@@ -57,15 +57,16 @@ class _ExpenseScreenState extends State<ExpenseScreen> {
     super.initState();
     _loadData();
   }
-
-  Future<void> _loadData() async {
+Future<void> _loadData() async {
     setState(() => _isLoading = true);
     try {
       final expensesData = await SupabaseService.getExpenses();
       final productsData = await SupabaseService.getProducts();
+      
       setState(() {
-        _expenses = expensesData ?? [];
-        _products = productsData ?? [];
+        // Cukup panggil variabelnya secara langsung (tanpa ?? [])
+        _expenses = expensesData; 
+        _products = productsData;
         _isLoading = false;
       });
     } catch (e) {
