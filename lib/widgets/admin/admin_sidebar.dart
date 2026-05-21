@@ -29,17 +29,17 @@ class AdminSidebar extends StatelessWidget {
                 Container(
                   padding: const EdgeInsets.all(10), // Diperbesar sedikit agar lebih proporsional
                   decoration: BoxDecoration(
-                    color: AppTheme.primaryBlue, // [REVISI] Latar belakang solid biru
-                    borderRadius: BorderRadius.circular(12), // [REVISI] Sudut lebih membulat
+                    color: AppTheme.primaryBlue, // Latar belakang solid biru
+                    borderRadius: BorderRadius.circular(12), // Sudut lebih membulat
                     boxShadow: [
                       BoxShadow(
                         color: AppTheme.primaryBlue.withOpacity(0.3),
                         blurRadius: 8,
                         offset: const Offset(0, 4),
                       )
-                    ], // [TAMBAHAN] Bayangan tipis agar logo pop-up elegan
+                    ], // Bayangan tipis agar logo pop-up elegan
                   ),
-                  child: const Icon(Icons.storefront, color: Colors.white, size: 24), // [REVISI] Ikon putih
+                  child: const Icon(Icons.storefront, color: Colors.white, size: 24), // Ikon putih
                 ),
                 const SizedBox(width: 14),
                 const Text('Sedap POS', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: AppTheme.textDark, letterSpacing: 0.5)),
@@ -110,14 +110,7 @@ class AdminSidebar extends StatelessWidget {
             padding: const EdgeInsets.all(16.0),
             child: Column(
               children: [
-                _buildNavItem(
-                  context,
-                  label: 'Pengaturan',
-                  outlineIcon: Icons.settings_outlined,
-                  activeIcon: Icons.settings,
-                  route: '/admin/settings',
-                ),
-                const SizedBox(height: 4),
+                // [REVISI] Tombol Pengaturan telah dihapus di sini
                 _buildNavItem(
                   context,
                   label: 'Keluar',

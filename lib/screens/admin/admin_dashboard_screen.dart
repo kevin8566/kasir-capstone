@@ -1,14 +1,15 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart'; // Diperlukan untuk format mata uang (NumberFormat)
+import 'package:intl/intl.dart';
 
 import '../../core/theme.dart';
 import '../../services/admin_service.dart';
 import '../../services/excel_service.dart';
-import '../../services/supabase_service.dart'; // [TAMBAHAN] Import Supabase untuk filter manual
+import '../../services/supabase_service.dart';
 import '../../widgets/admin/admin_sidebar.dart';
 import '../../widgets/admin/analytics_card.dart';
 import '../../widgets/admin/sales_chart.dart';
-import '../../models/transaction_model.dart'; // [TAMBAHAN] Untuk tipe data transaksi
+import '../../models/transaction_model.dart'; 
+// Import expense_model.dart telah dihapus agar tidak memunculkan warning unused import
 
 class AdminDashboardScreen extends StatefulWidget {
   const AdminDashboardScreen({super.key});
@@ -18,57 +19,68 @@ class AdminDashboardScreen extends StatefulWidget {
 }
 
 class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
-  String _selectedPeriod = 'Harian'; // Default filter
+  String _selectedPeriod = 'Harian'; 
   
-  // Variabel state untuk menyimpan data dinamis
   bool _isLoading = true;
-  double _totalEarnings = 0;
+  double _totalEarnings = 0.0;
   int _transactionCount = 0;
-  String _topProduct = '-';
+  double _totalExpensesPeriod = 0.0; 
 
   @override
   void initState() {
     super.initState();
-    // Tarik data saat layar pertama kali dibuka
     _fetchDashboardData();
   }
 
-  // Logika Utama: Mengambil dan mengolah data dari database (SupabaseService via AdminService)
   Future<void> _fetchDashboardData() async {
     setState(() => _isLoading = true);
 
-    // 1. Ambil data transaksi sesuai filter (Harian/Bulanan/Tahunan)
-    final data = await AdminService.getReportData(_selectedPeriod);
+    try {
+      final data = await AdminService.getReportData(_selectedPeriod);
+      final allExpenses = await SupabaseService.getExpenses();
 
-    // 2. Siapkan variabel penampung perhitungan
-    double earnings = 0;
-    Map<String, int> productCount = {};
+      double earnings = 0.0;
+      double expenses = 0.0;
+      DateTime now = DateTime.now();
 
-    // 3. Lakukan iterasi (loop) pada setiap nota dan item yang terjual
-    for (var t in data) {
-      earnings += t.totalAmount;
-      for (var item in t.items) {
-        // Hitung frekuensi penjualan produk untuk mencari "Produk Terlaris"
-        productCount[item.product.name] = (productCount[item.product.name] ?? 0) + item.quantity;
+      // Kalkulasi Pendapatan (Langsung ditambahkan karena dijamin bukan null oleh Null Safety)
+      for (var t in data) {
+        earnings += t.totalAmount;
+      }
+
+      // Kalkulasi Pengeluaran berdasarkan periode
+      for (var e in allExpenses) {
+        if (_selectedPeriod == 'Harian') {
+          if (e.date.year == now.year && e.date.month == now.month && e.date.day == now.day) {
+            expenses += e.amount;
+          }
+        } else if (_selectedPeriod == 'Bulanan') {
+          if (e.date.year == now.year && e.date.month == now.month) {
+            expenses += e.amount;
+          }
+        } else if (_selectedPeriod == 'Tahunan') {
+          if (e.date.year == now.year) {
+            expenses += e.amount;
+          }
+        }
+      }
+
+      setState(() {
+        _totalEarnings = earnings;
+        _transactionCount = data.length; 
+        _totalExpensesPeriod = expenses;
+        _isLoading = false;
+      });
+    } catch (e) {
+      setState(() => _isLoading = false);
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal memuat data: $e'), backgroundColor: Colors.red),
+        );
       }
     }
-
-    // 4. Tentukan produk terlaris
-    String topP = '-';
-    if (productCount.isNotEmpty) {
-      topP = productCount.entries.reduce((a, b) => a.value > b.value ? a : b).key;
-    }
-
-    // 5. Perbarui tampilan layar (UI) dengan data terbaru
-    setState(() {
-      _totalEarnings = earnings;
-      _transactionCount = data.length;
-      _topProduct = topP;
-      _isLoading = false;
-    });
   }
 
-  // Fungsi pembantu untuk mengubah angka (1500000) menjadi format Rupiah (Rp 1.500.000)
   String _formatIDR(double amount) {
     return NumberFormat.currency(locale: 'id_ID', symbol: 'Rp ', decimalDigits: 0).format(amount);
   }
@@ -79,10 +91,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
       backgroundColor: AppTheme.backgroundGrey,
       body: Row(
         children: [
-          // 1. Sidebar Navigasi
           const AdminSidebar(activeRoute: '/admin/dashboard'),
-
-          // 2. Konten Utama
           Expanded(
             child: Column(
               children: [
@@ -97,7 +106,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                         const SizedBox(height: 32),
                         _buildMetricsGrid(),
                         const SizedBox(height: 32),
-                        // Grafik penjualan
                         SalesChart(selectedPeriod: _selectedPeriod),
                       ],
                     ),
@@ -130,11 +138,8 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               color: AppTheme.textDark,
             ),
           ),
-          
-          // ── [REVISI] TOMBOL GENERATE EXCEL OTOMATIS BERDASARKAN FILTER ──
           ElevatedButton.icon(
             onPressed: () async {
-              // Menampilkan UI Loading yang elegan
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
                   content: Row(
@@ -149,10 +154,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               );
 
               try {
-                // 1. Tarik semua transaksi dasar
                 final allTransactions = await SupabaseService.getTransactions();
-                
-                // 2. Terapkan Filter Tanggal Real-Time Layaknya Mesin Analitik
                 List<TransactionModel> filteredData = [];
                 DateTime now = DateTime.now();
 
@@ -172,56 +174,39 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
                   filteredData = allTransactions;
                 }
 
-                // 3. Pencegahan jika data kosong
                 if (filteredData.isEmpty) {
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                        content: Text('Tidak ada penjualan di periode $_selectedPeriod ini.'), 
-                        backgroundColor: Colors.orange,
-                      ),
+                      SnackBar(content: Text('Tidak ada penjualan di periode $_selectedPeriod ini.'), backgroundColor: Colors.orange),
                     );
                   }
                   return;
                 }
 
-                // 4. Proses Pembuatan File Excel
                 await ExcelService.exportTransactionsToExcel(filteredData, _selectedPeriod);
 
-                // 5. Notifikasi Berhasil
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('✅ Laporan Excel berhasil diunduh!'), 
-                      backgroundColor: Colors.green,
-                    ),
+                    const SnackBar(content: Text('✅ Laporan Excel berhasil diunduh!'), backgroundColor: Colors.green),
                   );
                 }
               } catch (e) {
                 if (context.mounted) {
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text('❌ Gagal mengekspor: $e'), 
-                      backgroundColor: Colors.red,
-                    ),
+                    SnackBar(content: Text('❌ Gagal mengekspor: $e'), backgroundColor: Colors.red),
                   );
                 }
               }
             },
             icon: const Icon(Icons.file_download_outlined, color: Colors.white),
-            label: const Text(
-              'GENERATE EXCEL', 
-              style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-            ),
+            label: const Text('GENERATE EXCEL', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF10B981), // Menggunakan warna hijau Excel
+              backgroundColor: const Color(0xFF10B981), 
               padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
               elevation: 4,
             ),
           ),
-          // ────────────────────────────────────────────────────────────────
-          
         ],
       ),
     );
@@ -238,9 +223,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
             label: Text(p),
             selected: isSelected,
             onSelected: (val) {
-              // Jika filter ditekan, ubah status dan tarik data ulang
-              setState(() => _selectedPeriod = p);
-              _fetchDashboardData(); 
+              if (val) {
+                setState(() => _selectedPeriod = p);
+                _fetchDashboardData(); 
+              }
             },
             selectedColor: AppTheme.primaryBlue,
             labelStyle: TextStyle(
@@ -254,7 +240,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
   }
 
   Widget _buildMetricsGrid() {
-    // Tampilkan indikator loading saat memproses perhitungan agar UI terasa responsif
     if (_isLoading) {
       return const SizedBox(
         height: 150,
@@ -264,7 +249,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        // Responsivitas kolom
         int crossAxisCount = constraints.maxWidth < 900 ? 2 : 4;
         return GridView.count(
           shrinkWrap: true,
@@ -273,7 +257,6 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
           crossAxisSpacing: 20,
           mainAxisSpacing: 20,
           childAspectRatio: 1.5,
-          // List children tidak lagi menggunakan 'const' karena memuat data dinamis
           children: [
             AnalyticsCard(
               title: 'Total Pendapatan',
@@ -288,10 +271,10 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> {
               color: Colors.orange,
             ),
             AnalyticsCard(
-              title: 'Produk Terlaris',
-              value: _topProduct,
-              icon: Icons.auto_graph_outlined,
-              color: Colors.purple,
+              title: 'Total Pengeluaran',
+              value: _formatIDR(_totalExpensesPeriod),
+              icon: Icons.payments_outlined,
+              color: Colors.red.shade600,
             ),
             const AnalyticsCard(
               title: 'Status Sistem',
