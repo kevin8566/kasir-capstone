@@ -42,8 +42,12 @@ class SupabaseService {
   };
 
   static Future<List<Map<String, dynamic>>?> getRecipeForProduct(String productId) async {
-    await Future.delayed(const Duration(milliseconds: 200));
-    return _mockRecipes[productId];
+    try {
+      await Future.delayed(const Duration(milliseconds: 200));
+      return _mockRecipes[productId];
+    } catch (e) {
+      return null; // Pengaman jika terjadi error
+    }
   }
 
   static Future<void> updateMasterRecipe(String productId, List<Map<String, dynamic>> newBaseRecipe) async {
@@ -59,8 +63,14 @@ class SupabaseService {
 
   // ── 4. CRUD PRODUK ─────────────────────────────────────────────────
   static Future<List<ProductModel>> getProducts() async {
-    await Future.delayed(const Duration(milliseconds: 400));
-    return List.from(_mockProducts);
+    try {
+      await Future.delayed(const Duration(milliseconds: 400));
+      // [PERBAIKAN]: Nanti saat integrasi DB asli, jika (data == null) return [];
+      return List.from(_mockProducts);
+    } catch (e) {
+      // Jaring pengaman mutlak: Jika DB gagal, return array kosong, BUKAN null!
+      return []; 
+    }
   }
 
   static Future<void> addProduct(ProductModel product) async {
@@ -92,8 +102,12 @@ class SupabaseService {
 
   // ── 5. TRANSAKSI & PENGELUARAN ─────────────────────────────────────
   static Future<List<TransactionModel>> getTransactions() async {
-    await Future.delayed(const Duration(milliseconds: 400));
-    return List.from(_mockTransactions);
+    try {
+      await Future.delayed(const Duration(milliseconds: 400));
+      return List.from(_mockTransactions);
+    } catch (e) {
+      return []; // Jaring pengaman
+    }
   }
 
   static Future<void> addTransaction(TransactionModel transaction) async {
@@ -105,9 +119,13 @@ class SupabaseService {
   }
 
   static Future<List<ExpenseModel>> getExpenses() async {
-    await Future.delayed(const Duration(milliseconds: 300));
-    final sorted = List<ExpenseModel>.from(_mockExpenses)..sort((a, b) => b.date.compareTo(a.date));
-    return sorted;
+    try {
+      await Future.delayed(const Duration(milliseconds: 300));
+      final sorted = List<ExpenseModel>.from(_mockExpenses)..sort((a, b) => b.date.compareTo(a.date));
+      return sorted;
+    } catch (e) {
+      return []; // Jaring pengaman
+    }
   }
 
   static Future<void> addExpense(ExpenseModel expense) async {
@@ -125,42 +143,62 @@ class SupabaseService {
   }
 
   static Future<double> getTotalExpenses() async {
-    return _mockExpenses.fold<double>(0, (sum, e) => sum + e.amount);
+    try {
+      return _mockExpenses.fold<double>(0, (sum, e) => sum + e.amount);
+    } catch (e) {
+      return 0; // Jaring pengaman
+    }
   }
 
   // ── 6. DUMMY DATA GENERATOR (MENCEGAH DASHBOARD KOSONG) ────────────
   static Future<void> seedDummyData() async {
-    if (_mockTransactions.isNotEmpty) return;
-    final now = DateTime.now();
-    for (int i = 0; i < 15; i++) {
-      DateTime fakeDate = i < 5 ? now.subtract(Duration(hours: i * 2)) : (i < 10 ? now.subtract(Duration(days: 5, hours: i)) : now.subtract(Duration(days: 40, hours: i)));
-      final product = _mockProducts[i % _mockProducts.length];
-      final transactionTotal = product.price * ((i % 3) + 1);
+    try {
+      if (_mockTransactions.isNotEmpty) return;
+      final now = DateTime.now();
+      for (int i = 0; i < 15; i++) {
+        DateTime fakeDate = i < 5 ? now.subtract(Duration(hours: i * 2)) : (i < 10 ? now.subtract(Duration(days: 5, hours: i)) : now.subtract(Duration(days: 40, hours: i)));
+        final product = _mockProducts[i % _mockProducts.length];
+        final transactionTotal = product.price * ((i % 3) + 1);
 
-      _mockTransactions.add(
-        TransactionModel(
-          id: 'TRX-DUMMY-00${15 - i}', 
-          items: [], 
-          totalAmount: transactionTotal, 
-          date: fakeDate, 
-          paymentMethod: i % 2 == 0 ? 'QRIS' : 'Tunai', 
-          status: 'Completed'
-        ),
-      );
+        _mockTransactions.add(
+          TransactionModel(
+            id: 'TRX-DUMMY-00${15 - i}', 
+            items: [], 
+            totalAmount: transactionTotal, 
+            date: fakeDate, 
+            paymentMethod: i % 2 == 0 ? 'QRIS' : 'Tunai', 
+            status: 'Completed'
+          ),
+        );
+      }
+    } catch (e) {
+      // Abaikan jika seed gagal
     }
   }
 
   // ── 7. FUNGSI STATISTIK UNTUK DASHBOARD ────────────────────────────
   static Future<double> getTotalSales() async {
-    return _mockTransactions.fold<double>(0, (sum, t) => sum + t.totalAmount);
+    try {
+      return _mockTransactions.fold<double>(0, (sum, t) => sum + t.totalAmount);
+    } catch (e) {
+      return 0;
+    }
   }
 
   static Future<int> getTotalTransactions() async {
-    return _mockTransactions.length;
+    try {
+      return _mockTransactions.length;
+    } catch (e) {
+      return 0;
+    }
   }
 
   static Future<int> getTotalProducts() async {
-    return _mockProducts.length;
+    try {
+      return _mockProducts.length;
+    } catch (e) {
+      return 0;
+    }
   }
 
   // ── 8. FUNGSI EKSEKUSI PRODUKSI HPP ────────────────────────────────
